@@ -41,6 +41,12 @@ describe("kong start/stop #" .. strategy, function()
     assert(helpers.kong_exec("start --conf " .. helpers.test_conf_path))
     assert(helpers.kong_exec("stop --prefix " .. helpers.test_conf.prefix))
   end)
+  it("stop honors custom Kong prefix higher than environment variable", function()
+    assert(helpers.kong_exec("start --conf " .. helpers.test_conf_path))
+    helpers.setenv("KONG_PREFIX", "/tmp/dne")
+    finally(function() helpers.unsetenv("KONG_PREFIX") end)
+    assert(helpers.kong_exec("stop --prefix " .. helpers.test_conf.prefix))
+  end)
   it("start/stop Kong with only stream listeners enabled", function()
     assert(helpers.kong_exec("start ", {
       prefix = helpers.test_conf.prefix,
@@ -333,6 +339,48 @@ describe("kong start/stop #" .. strategy, function()
           database = "off",
           declarative_config = yaml_file,
           nginx_worker_processes = 100, -- stress test initialization
+          nginx_conf = "spec/fixtures/custom_nginx.template",
+        }))
+
+        helpers.wait_until(function()
+          -- get a connection, retry until kong starts
+          helpers.wait_until(function()
+            local pok
+            pok, proxy_client = pcall(helpers.proxy_client)
+            return pok
+          end, 10)
+
+          local res = assert(proxy_client:send {
+            method = "GET",
+            path = "/",
+            headers = {
+              host = "example.test",
+            }
+          })
+          local ok = res.status == 200
+
+          if proxy_client then
+            proxy_client:close()
+            proxy_client = nil
+          end
+
+          return ok
+        end, 10)
+      end)
+      it("starts with a valid declarative config string", function()
+        local config_string = [[{"_format_version":"1.1","services":[{"name":"my-service","url":"http://127.0.0.1:15555","routes":[{"name":"example-route","hosts":["example.test"]}]}]}]]
+        local proxy_client
+
+        finally(function()
+          helpers.stop_kong(helpers.test_conf.prefix)
+          if proxy_client then
+            proxy_client:close()
+          end
+        end)
+
+        assert(helpers.start_kong({
+          database = "off",
+          declarative_config_string = config_string,
           nginx_conf = "spec/fixtures/custom_nginx.template",
         }))
 

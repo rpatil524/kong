@@ -44,6 +44,7 @@ local phases_with_ctx =
     phase_checker.new(PHASES.rewrite,
                       PHASES.access,
                       PHASES.header_filter,
+                      PHASES.response,
                       PHASES.body_filter,
                       PHASES_LOG)
 local _LEVELS = {
@@ -221,7 +222,7 @@ local serializers = {
 -- ```
 --
 -- @function kong.log
--- @phases init_worker, certificate, rewrite, access, header_filter, body_filter, log
+-- @phases init_worker, certificate, rewrite, access, header_filter, response, body_filter, log
 -- @param ... all params will be concatenated and stringified before being sent to the log
 -- @return Nothing; throws an error on invalid inputs.
 --
@@ -261,7 +262,7 @@ local serializers = {
 -- ```
 --
 -- @function kong.log.LEVEL
--- @phases init_worker, certificate, rewrite, access, header_filter, body_filter, log
+-- @phases init_worker, certificate, rewrite, access, header_filter, response, body_filter, log
 -- @param ... all params will be concatenated and stringified before being sent to the log
 -- @return Nothing; throws an error on invalid inputs.
 -- @usage
@@ -363,6 +364,73 @@ local function gen_log_func(lvl_const, imm_buf, to_string, stack_level, sep)
 end
 
 
+--- Write a deprecation log line (similar to `kong.log.warn`).
+--
+-- Arguments given to this function can be of any type, but table arguments
+-- will be converted to strings via `tostring` (thus potentially calling a
+-- table's `__tostring` metamethod if set). When the last argument is a table,
+-- it is considered as a deprecation metadata. The table can include following
+-- properties:
+--
+-- ``` lua
+-- {
+--   after = "2.5.0",   -- deprecated after Kong version 2.5.0 (defaults to `nil`)
+--   removal = "3.0.0", -- about to be removed with Kong version 3.0.0 (defaults to `nil`)
+--   trace = true,      -- writes stack trace along with the deprecation message (defaults to `nil`)
+-- }
+-- ```
+--
+-- For example, the following call:
+--
+-- ``` lua
+-- kong.log.deprecation("hello ", "world")
+-- ```
+--
+-- would, within the core, produce a log line similar to:
+--
+-- ``` plain
+-- 2017/07/09 19:36:25 [warn] 25932#0: *1 [kong] some_file.lua:54 hello world, client: 127.0.0.1, server: localhost, request: "GET /log HTTP/1.1", host: "localhost"
+-- ```
+--
+-- If invoked from within a plugin (e.g. `key-auth`) it would include the
+-- namespace prefix, like so:
+--
+-- ``` plain
+-- 2017/07/09 19:36:25 [warn] 25932#0: *1 [kong] some_file.lua:54 [key-auth] hello world, client: 127.0.0.1, server: localhost, request: "GET /log HTTP/1.1", host: "localhost"
+-- ```
+--
+-- And with metatable, the following call:
+--
+-- ``` lua
+-- kong.log.deprecation("hello ", "world", { after = "2.5.0", removal = "3.0.0" })
+-- ```
+--
+-- would, within the core, produce a log line similar to:
+--
+-- ``` plain
+-- 2017/07/09 19:36:25 [warn] 25932#0: *1 [kong] some_file.lua:54 hello world (deprecated after 2.5.0, scheduled for removal in 3.0.0), client: 127.0.0.1, server: localhost, request: "GET /log HTTP/1.1", host: "localhost"
+-- ```
+--
+-- @function kong.log.deprecation
+-- @phases init_worker, certificate, rewrite, access, header_filter, response, body_filter, log
+-- @param ... all params will be concatenated and stringified before being sent to the log
+--            (if the last param is a table, it is considered as a deprecation metadata)
+-- @return Nothing; throws an error on invalid inputs.
+--
+-- @usage
+-- kong.log.deprecation("hello ", "world")
+-- kong.log.deprecation("hello ", "world", { after = "2.5.0" })
+-- kong.log.deprecation("hello ", "world", { removal = "3.0.0" })
+-- kong.log.deprecation("hello ", "world", { after = "2.5.0", removal = "3.0.0" })
+-- kong.log.deprecation("hello ", "world", { trace = true })
+local new_deprecation do
+  local mt = getmetatable(require("kong.deprecation"))
+  new_deprecation = function(write)
+    return setmetatable({ write = write }, mt)
+  end
+end
+
+
 ---
 -- Like `kong.log()`, this function will produce a log with the `notice` level,
 -- and accepts any number of arguments as well. If inspect logging is disabled
@@ -403,7 +471,7 @@ end
 -- library to pretty-print its arguments.
 --
 -- @function kong.log.inspect
--- @phases init_worker, certificate, rewrite, access, header_filter, body_filter, log
+-- @phases init_worker, certificate, rewrite, access, header_filter, response, body_filter, log
 -- @param ... Parameters will be concatenated with spaces between them and
 -- rendered as described
 -- @usage
@@ -433,7 +501,7 @@ do
     -- formatting of arguments.
     --
     -- @function kong.log.inspect.on
-    -- @phases init_worker, certificate, rewrite, access, header_filter, body_filter, log
+    -- @phases init_worker, certificate, rewrite, access, header_filter, response, body_filter, log
     -- @usage
     -- kong.log.inspect.on()
     function self.on()
@@ -446,7 +514,7 @@ do
     -- `kong.log.inspect()` will be nopped.
     --
     -- @function kong.log.inspect.off
-    -- @phases init_worker, certificate, rewrite, access, header_filter, body_filter, log
+    -- @phases init_worker, certificate, rewrite, access, header_filter, response, body_filter, log
     -- @usage
     -- kong.log.inspect.off()
     function self.off()
@@ -495,7 +563,7 @@ end
 -- phase in most real-usage cases.
 --
 -- @function kong.log.set_serialize_value
--- @phases certificate, rewrite, access, header_filter, body_filter, log
+-- @phases certificate, rewrite, access, header_filter, response, body_filter, log
 -- @tparam string key the name of the field.
 -- @tparam number|string|boolean|table value value to be set. When a table is used, its keys must be numbers, strings, booleans, and its values can be numbers, strings or other tables like itself, recursively.
 -- @tparam table options can contain two entries: options.mode can be `set` (the default, always sets), `add` (only add if entry does not already exist) and `replace` (only change value if it already exists).
@@ -847,8 +915,9 @@ local function new_log(namespace, format)
     for log_lvl_name, log_lvl in pairs(_LEVELS) do
       self[log_lvl_name] = gen_log_func(log_lvl, buf)
     end
-  end
 
+    self.deprecation = new_deprecation(gen_log_func(_LEVELS.warn, buf, nil, 5))
+  end
 
   self.set_format(format)
 

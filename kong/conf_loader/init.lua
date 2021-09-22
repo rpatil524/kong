@@ -631,6 +631,7 @@ local CONF_INFERENCES = {
   cluster_server_name = { typ = "string" },
   cluster_data_plane_purge_delay = { typ = "number" },
   cluster_ocsp = { enum = { "on", "off", "optional" } },
+  cluster_v2 = { typ = "boolean", },
 
   kic = { typ = "boolean" },
   pluginserver_names = { typ = "array" },
@@ -964,12 +965,18 @@ local function check_and_infer(conf, opts)
   end
 
   if conf.dns_order then
-    local allowed = { LAST = true, A = true, CNAME = true, SRV = true }
+    local allowed = { LAST = true, A = true, CNAME = true,
+                      SRV = true, AAAA = true }
 
     for _, name in ipairs(conf.dns_order) do
       if not allowed[name:upper()] then
         errors[#errors + 1] = fmt("dns_order: invalid entry '%s'",
                                   tostring(name))
+      end
+      if name:upper() == "AAAA" then
+        log.warn("the 'dns_order' configuration property specifies the " ..
+                 "experimental IPv6 entry 'AAAA'")
+
       end
     end
   end

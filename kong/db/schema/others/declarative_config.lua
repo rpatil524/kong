@@ -16,6 +16,7 @@ local ipairs = ipairs
 local insert = table.insert
 local concat = table.concat
 local tostring = tostring
+local cjson_encode = require("cjson.safe").encode
 
 local DeclarativeConfig = {}
 
@@ -243,14 +244,12 @@ local function load_plugin_subschemas(fields, plugin_set, indent)
   for _, f in ipairs(fields) do
     local fname, fdata = next(f)
 
-    if fname == "plugins" then
+    -- Exclude cases where `plugins` are used expect from plugins entities.
+    -- This assumes other entities doesn't have `name` as its subschema_key.
+    if fname == "plugins" and fdata.elements and fdata.elements.subschema_key == "name" then
       for plugin in pairs(plugin_set) do
-        local _, err, err_t = plugin_loader.load_subschema(fdata.elements, plugin, errors)
+        local _, err = plugin_loader.load_subschema(fdata.elements, plugin, errors)
 
-        if err_t then
-          return nil, "schema for plugin '" .. plugin .. "' is invalid: " ..
-                      tostring(errors:schema_violation(err_t))
-        end
         if err then
           return nil, err
         end
@@ -359,7 +358,9 @@ local function validate_references(self, input)
         if not found then
           errors[a] = errors[a] or {}
           errors[a][k.at] = errors[a][k.at] or {}
-          local msg = "invalid reference '" .. k.key .. ": " .. k.value ..
+          local msg = "invalid reference '" .. k.key .. ": " ..
+                      (type(k.value) == "string"
+                      and k.value or cjson_encode(k.value)) ..
                       "' (no such entry in '" .. b .. "')"
           insert(errors[a][k.at], msg)
         end
@@ -498,15 +499,16 @@ local function generate_ids(input, known_entities, parent_entity)
     end
 
     local schema = all_schemas[entity]
-    for _, item in ipairs(input[entity]) do
+    for i, item in ipairs(input[entity]) do
       local pk_name, key = get_key_for_uuid_gen(entity, item, schema,
                                                 parent_fk, child_key)
       if key then
+        item = utils.deep_copy(item, false)
         item[pk_name] = generate_uuid(schema.name, key)
+        input[entity][i] = item
       end
 
       generate_ids(item, known_entities, entity)
-
     end
 
     ::continue::
@@ -718,7 +720,6 @@ end
 
 
 function DeclarativeConfig.load(plugin_set, include_foreign)
-
   all_schemas = {}
   local schemas_array = {}
   for _, entity in ipairs(constants.CORE_ENTITIES) do
@@ -735,10 +736,10 @@ function DeclarativeConfig.load(plugin_set, include_foreign)
   end
 
   for plugin in pairs(plugin_set) do
-    local entities, err, err_t = plugin_loader.load_entities(plugin, errors,
+    local entities, err = plugin_loader.load_entities(plugin, errors,
                                            plugin_loader.load_entity_schema)
-    if err or err_t then
-      return nil, err, err_t
+    if err then
+      return nil, err
     end
     for entity, schema in pairs(entities) do
       all_schemas[entity] = schema

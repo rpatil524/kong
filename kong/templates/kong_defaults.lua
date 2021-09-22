@@ -29,6 +29,7 @@ cluster_ca_cert = NONE
 cluster_server_name = NONE
 cluster_data_plane_purge_delay = 1209600
 cluster_ocsp = off
+cluster_v2 = off
 
 mem_cache_size = 128m
 ssl_cert = NONE
@@ -87,6 +88,7 @@ nginx_upstream_keepalive_timeout = NONE
 nginx_http_upstream_keepalive = NONE
 nginx_http_upstream_keepalive_requests = NONE
 nginx_http_upstream_keepalive_timeout = NONE
+nginx_http_lua_regex_match_limit = 100000
 
 client_max_body_size = 0
 client_body_buffer_size = 8k
@@ -139,6 +141,7 @@ cassandra_data_centers = dc1:2,dc2:3
 cassandra_schema_consensus_timeout = 10000
 
 declarative_config = NONE
+declarative_config_string = NONE
 
 db_update_frequency = 5
 db_update_propagation = 0
